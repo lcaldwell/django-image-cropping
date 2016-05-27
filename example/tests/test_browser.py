@@ -1,3 +1,7 @@
+from __future__ import division
+
+import os
+
 from pyvirtualdisplay import Display
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from selenium.webdriver.firefox.webdriver import WebDriver
@@ -15,6 +19,11 @@ try:
         StaticLiveServerTestCase as LiveServerTestCase)
 except ImportError:
     from django.test import LiveServerTestCase
+
+FIXTURES_LOCATION = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'static',
+    'images'
+)
 
 
 class BrowserTestBase(object):
@@ -38,6 +47,27 @@ class BrowserTestBase(object):
         self.image = factory.create_cropped_image()
         self.user = factory.create_superuser()
         super(BrowserTestBase, self).setUp()
+
+    def _get_fixture_path(self, image_name):
+        path = os.path.join(FIXTURES_LOCATION, image_name)
+        return path
+
+    def _wait_for_element_with_css(self, css_selector):
+        element = WebDriverWait(self.selenium, timeout=45).until(
+            lambda b:
+                b.find_element_by_css_selector(css_selector)
+        )
+        return element
+
+    def _ensure_images_roughly_match(self, image_element, width, height):
+        aspect_ratio = width / height
+        img_width = int(image_element.get_attribute('naturalWidth'))
+        img_height = int(image_element.get_attribute('naturalHeight'))
+        img_aspect_ratio = img_width / img_height
+        ratios_nearly_equal = (
+            0.98 * img_aspect_ratio <= aspect_ratio <= 1.02 * img_aspect_ratio
+        )
+        self.assertTrue(ratios_nearly_equal)
 
     def _ensure_page_loaded(self, url=None):
         # see: http://stackoverflow.com/questions/18729483/
@@ -68,8 +98,12 @@ class BrowserTestBase(object):
             self.assertEqual(widget.get_attribute(attr), defaults[attr])
 
     def _ensure_thumbnail_rendered(self):
-        img = self.selenium.find_element_by_css_selector('.image-ratio + img')
-        self.assertTrue(self.image.image_field.url in img.get_attribute('src'))
+        img = self._wait_for_element_with_css('.image-ratio + img')
+        # check images have same aspect ratio, since they no longer share urls
+        stored_image = self.image.image_field
+        self._ensure_images_roughly_match(
+            img, stored_image.width, stored_image.height
+        )
 
     def _ensure_jcrop_initialized(self):
         # make sure Jcrop is properly loaded
@@ -88,6 +122,7 @@ class BrowserTestBase(object):
 
 
 class AdminImageCroppingTestCase(BrowserTestBase, LiveServerTestCase):
+
     def setUp(self):
         super(AdminImageCroppingTestCase, self).setUp()
         self._ensure_page_loaded('%s%s' % (self.live_server_url, '/admin'))
@@ -98,11 +133,42 @@ class AdminImageCroppingTestCase(BrowserTestBase, LiveServerTestCase):
         self.selenium.find_element_by_xpath('//input[@value="Log in"]').click()
         self._ensure_page_loaded()
 
+
+class AdminTest(AdminImageCroppingTestCase):
+
     def test_widget_rendered(self):
         edit_view = reverse('admin:example_image_change', args=[self.image.pk])
         self._ensure_page_loaded('%s%s' % (self.live_server_url, edit_view))
         self._ensure_widget_rendered()
         self._ensure_thumbnail_rendered()
+
+    def test_live_update(self):
+        add_view = reverse('admin:example_image_add')
+        self._ensure_page_loaded('%s%s' % (self.live_server_url, add_view))
+        image_input = self.selenium.find_element_by_xpath(
+            '//input[@id="id_image_field"]')
+        image_path = self._get_fixture_path('example_image.jpg')
+        image_input.send_keys(image_path)
+        self._ensure_thumbnail_rendered()
+        self._ensure_jcrop_initialized()
+
+    def test_exif_respected(self):
+        add_view = reverse('admin:example_image_add')
+        self._ensure_page_loaded('%s%s' % (self.live_server_url, add_view))
+        image_input = self.selenium.find_element_by_xpath(
+            '//input[@id="id_image_field"]')
+        image_path = self._get_fixture_path('example_exif_6_image.jpg')
+        image_input.send_keys(image_path)
+        img = self._wait_for_element_with_css('.image-ratio + img')
+        img_width = int(img.get_attribute('naturalWidth'))
+        img_height = int(img.get_attribute('naturalHeight'))
+        self.assertEqual(img_width, 600)
+        self.assertEqual(img_height, 450)
+        # Save and check dimensions of saved image match those of original
+        self.selenium.find_element_by_xpath(
+            '//input[@value="Save and continue editing"]').click()
+        stored_img = self._wait_for_element_with_css('.image-ratio + img')
+        self._ensure_images_roughly_match(stored_img, img_width, img_height)
 
 
 class ModelFormCroppingTestCase(BrowserTestBase, LiveServerTestCase):
@@ -112,6 +178,16 @@ class ModelFormCroppingTestCase(BrowserTestBase, LiveServerTestCase):
         self._ensure_page_loaded('%s%s' % (self.live_server_url, edit_view))
         self._ensure_widget_rendered()
         self._ensure_thumbnail_rendered()
+
+    def test_live_update(self):
+        add_view = reverse('modelform_example')
+        self._ensure_page_loaded('%s%s' % (self.live_server_url, add_view))
+        image_input = self.selenium.find_element_by_xpath(
+            '//input[@id="id_image_field"]')
+        image_path = self._get_fixture_path('example_image.jpg')
+        image_input.send_keys(image_path)
+        self._ensure_thumbnail_rendered()
+        self._ensure_jcrop_initialized()
 
 
 class CropForeignKeyTest(AdminImageCroppingTestCase):
