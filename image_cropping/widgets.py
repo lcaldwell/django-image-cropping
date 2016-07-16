@@ -20,57 +20,55 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def thumbnail_url(image_path):
-    thumbnail_options = {
-        'detail': True,
-        'upscale': True,
-        'size': settings.IMAGE_CROPPING_THUMB_SIZE,
-    }
-    return get_backend().get_thumbnail_url(image_path, thumbnail_options)
+class CropWidget(object):
 
+    def thumbnail_url(self, image_path):
+        thumbnail_options = {
+            'detail': True,
+            'upscale': True,
+            'size': settings.IMAGE_CROPPING_THUMB_SIZE,
+        }
+        return get_backend().get_thumbnail_url(image_path, thumbnail_options)
 
-def get_attrs(image, name):
-    attrs = {
-        'class': 'crop-thumb',
-        'data-field-name': name,
-    }
-    if image:
-        try:
-            # TODO test case
+    def get_crop_attrs(self, image, name):
+        attrs = {
+            'class': 'crop-thumb',
+            'data-field-name': name,
+        }
+        if image:
             try:
-                # try to use image as a file
-                # If the image file has already been closed, open it
-                if image.closed:
-                    image.open()
+                # TODO test case
+                try:
+                    # try to use image as a file
+                    # If the image file has already been closed, open it
+                    if image.closed:
+                        image.open()
 
-                # Seek to the beginning of the file.  This is necessary if the
-                # image has already been read using this file handler
-                image.seek(0)
-            except:
+                    # Seek to the beginning of the file.  This is necessary if
+                    # the image has already been read using this file handler
+                    image.seek(0)
+                except:
+                    pass
+
+                try:
+                    # open image and rotate according to its exif.orientation
+                    width, height = get_backend().get_size(image)
+                except AttributeError:
+                    # invalid image -> AttributeError
+                    width = image.width
+                    height = image.height
+                attrs.update({
+                    'data-thumbnail-url': self.thumbnail_url(image),
+                    'data-org-width': width,
+                    'data-org-height': height,
+                    'data-max-width': width,
+                    'data-max-height': height,
+                })
+            except (ValueError, AttributeError, IOError):
+                # can't create thumbnail from image
                 pass
 
-            try:
-                # open image and rotate according to its exif.orientation
-                width, height = get_backend().get_size(image)
-            except AttributeError:
-                # invalid image -> AttributeError
-                width = image.width
-                height = image.height
-            attrs.update({
-                'data-thumbnail-url': thumbnail_url(image),
-                'data-org-width': width,
-                'data-org-height': height,
-                'data-max-width': width,
-                'data-max-height': height,
-            })
-        except (ValueError, AttributeError, IOError):
-            # can't create thumbnail from image
-            pass
-
-    return attrs
-
-
-class CropWidget(object):
+        return attrs
 
     def _media(self):
         js = [
@@ -98,7 +96,7 @@ class ImageCropWidget(AdminFileWidget, CropWidget):
     def render(self, name, value, attrs=None):
         if not attrs:
             attrs = {}
-        attrs.update(get_attrs(value, name))
+        attrs.update(self.get_crop_attrs(value, name))
         return super(AdminFileWidget, self).render(name, value, attrs)
 
 
@@ -130,7 +128,7 @@ class CropForeignKeyWidget(ForeignKeyRawIdWidget, CropWidget):
                     get_model(app_name, model_name).objects.get(pk=value),
                     self.field_name,
                 )
-                attrs.update(get_attrs(image, name))
+                attrs.update(self.get_crop_attrs(image, name))
             except (ObjectDoesNotExist, LookupError):
                 logger.error("Can't find object: %s.%s with primary key %s "
                              "for cropping." % (app_name, model_name, value))
